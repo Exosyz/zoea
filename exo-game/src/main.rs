@@ -1,9 +1,9 @@
 mod app;
-mod assets_manager;
+mod camera;
 mod game_logic;
 mod game_renderer;
 mod math;
-mod samplers;
+mod transform;
 
 use crate::app::App;
 use winit::event_loop::{ControlFlow, EventLoop};

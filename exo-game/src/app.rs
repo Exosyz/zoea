@@ -29,19 +29,31 @@ impl Default for App<'_> {
 
 impl<'window> ApplicationHandler for App<'window> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.game_renderer.is_none() {
-            let window = Arc::new(
-                event_loop
-                    .create_window(WindowAttributes::default())
-                    .unwrap(),
-            );
-            // Use block_on only for initialization
-            let mut game_renderer =
-                pollster::block_on(GameRenderer::new(window, "./assets/shader.wgsl"));
-
-            let _ = game_renderer.assets_manager.load("./assets/test.png");
-            self.game_renderer = Some(game_renderer);
+        if self.game_renderer.is_some() {
+            return;
         }
+
+        let window = Arc::new(
+            event_loop
+                .create_window(WindowAttributes::default())
+                .unwrap(),
+        );
+
+        // Block_on is acceptable here as it's a one-time startup cost
+        let mut renderer = pollster::block_on(GameRenderer::new(window));
+
+        // Note: Production engines usually load a 'manifest' file rather than hardcoding here
+        renderer
+            .assets_manager
+            .load("./assets/terrain_tiles_v2.png", 320, 512, |atlas| {
+                atlas
+                    .add_sprite(0, 0, 32, 32)
+                    .add_sprite(0, 32, 32, 32)
+                    .add_sprite(32, 32, 32, 32);
+            })
+            .expect("Failed to load core atlas");
+
+        self.game_renderer = Some(renderer);
     }
 
     fn window_event(
@@ -68,11 +80,12 @@ impl<'window> ApplicationHandler for App<'window> {
 
                 // Add elapsed time to our "bucket"
                 self.accumulator += frame_time;
-
+                let mut iterations = 0;
                 // Step the logic as many times as needed to catch up
-                while self.accumulator >= self.target_tps {
+                while self.accumulator >= self.target_tps && iterations < 10 {
                     self.game_logic.update();
                     self.accumulator -= self.target_tps;
+                    iterations += 1;
                 }
 
                 // Calculate how far we are into the NEXT frame

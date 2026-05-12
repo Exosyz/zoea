@@ -577,6 +577,7 @@ dependencies = [
 name = "exo-game"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "image",
  "pollster",
  "wgpu",
