@@ -1,0 +1,10 @@
+[package]
+name = "zoea-rendering"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+wgpu = { workspace = true }
+bytemuck = { workspace = true }
+image = { workspace = true }
+zoea-core = { path = "../zoea-core" }

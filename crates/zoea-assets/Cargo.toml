@@ -1,0 +1,9 @@
+[package]
+name = "zoea-assets"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bytemuck = { workspace = true }
+
+zoea-core = { path = "../zoea-core" }

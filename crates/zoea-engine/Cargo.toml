@@ -1,0 +1,13 @@
+[package]
+name = "zoea-engine"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+winit = { workspace = true }
+pollster = { workspace = true }
+
+zoea-core = { path = "../zoea-core" }
+zoea-ecs = { path = "../zoea-ecs" }
+zoea-assets = { path = "../zoea-assets" }
+zoea-rendering = { path = "../zoea-rendering" }

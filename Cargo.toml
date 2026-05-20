@@ -1,0 +1,19 @@
+[workspace]
+members = [
+    "crates/zoea-assets",
+    "crates/zoea-core",
+    "crates/zoea-ecs",
+    "crates/zoea-engine",
+    "crates/zoea-math",
+    "crates/zoea-rendering",
+    "games/zoea-tester",
+]
+
+resolver = "3"
+
+[workspace.dependencies]
+winit = { version = "0.30.13" }
+pollster = "0.4.0"
+wgpu = "29.0.3"
+image = "0.25.10"
+bytemuck = "1.25.0"
