@@ -7,10 +7,24 @@ Idk why but rust rover config isn't working
 cargo run
 ```
 
-TODO fix les Asstes / Atlas 
-Pour moi les atlas va dans la crate assets avec la description de celle-ci 
-et dans la crate rendering l'image en GRAM avec un IID et le lien entre les deux et cet unique ID 
+### How to run tests
 
-il faut suremùent un manager ce ntrale pour faire le binding entre les 2 ???
+```shell
+cargo test -p <nom-du-crate>
+```
+
+#### Spefic file tests
+
+```shell
+cargo test -p zoea-ecs -- storage::chunk
+```
+
+Pour supprimer les warnings lors des tests ajouter devant la commande `RUSTFLAGS="-Awarnings" `
+
+### Tree View
+
+```shell
+tree -I 'target|*.md' /home/rcast/dev/exo-game
+```
 
 
