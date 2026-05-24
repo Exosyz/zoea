@@ -7,7 +7,7 @@ pipelines.
 
 Before you stream anything to the GPU, your raw CPU memory must be padded to match what graphics hardware expects.
 
-* [ ] **Enforce 256-Byte Column Alignment**
+* [x] **Enforce 256-Byte Column Alignment**
 * Update the internal allocation logic of your `Chunk` type. Instead of using standard `Vec<u8>`, use
   `std::alloc::alloc` and `std::alloc::Layout` to ensure every component column starts on a hardware-friendly alignment
   boundary (typically 64-byte for CPU SIMD or 256-byte for GPU constants).
@@ -21,7 +21,7 @@ pub unsafe fn get_column_slice_info(&self, col_idx: usize) -> (NonNull<u8>, usiz
 
 ```
 
-* [ ] **Verify Layout Determinism**
+* [x] **Verify Layout Determinism**
 * Use compile-time layout checks (`#[repr(C)]` or `#[repr(align(...))]`) on any component types destined for the GPU to
   ensure Rust doesn't reorder struct fields unpredictably.
 

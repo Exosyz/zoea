@@ -16,6 +16,7 @@ pub struct PendingComponent {
     pub id: ComponentId,
     pub ptr: NonNull<u8>,
     pub layout: Layout,
+    pub align: usize,
     pub drop_fn: unsafe fn(NonNull<u8>),
 }
 
@@ -30,6 +31,7 @@ impl PendingComponent {
                 ptr: NonNull::dangling(),
                 layout,
                 drop_fn: drop_component_helper::<T>,
+                align: 1,
             };
         }
 
@@ -47,6 +49,7 @@ impl PendingComponent {
             ptr: NonNull::new(raw).unwrap(),
             layout,
             drop_fn: drop_component_helper::<T>,
+            align: T::ALIGNMENT,
         }
     }
 

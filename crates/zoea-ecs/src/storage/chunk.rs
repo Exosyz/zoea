@@ -68,7 +68,8 @@ impl Chunk {
             let mut valid = true;
 
             for comp in component_layouts {
-                let array_layout = Layout::from_size_align(comp.size() * capacity, comp.align())
+                let alignment = comp.align;
+                let array_layout = Layout::from_size_align(comp.size() * capacity, alignment)
                     .map_err(|_| EcsError::LayoutCalculationFailed)?;
 
                 if let Ok((new_layout, offset)) = current_layout.extend(array_layout) {
@@ -139,12 +140,7 @@ impl Chunk {
             .iter()
             .zip(offsets.iter())
             .map(|(component, &offset)| {
-                Column::new(
-                    offset,
-                    component.size(),
-                    component.align(),
-                    component.drop_fn,
-                )
+                Column::new(offset, component.size(), component.align, component.drop_fn)
             })
             .collect();
 

@@ -92,6 +92,7 @@ pub(crate) fn create_layout<T: Component>(drop_fn: unsafe fn(NonNull<u8>)) -> Co
     ComponentLayout {
         id: get_id::<T>(),
         layout: Layout::new::<T>(),
+        align: T::ALIGNMENT,
         drop_fn,
     }
 }

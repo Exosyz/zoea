@@ -1,3 +1,4 @@
+use crate::ecs::component::Component;
 use bytemuck::{Pod, Zeroable};
 
 #[repr(C)]
@@ -22,4 +23,8 @@ impl UvRectangle {
     pub fn from_size(width: f32, height: f32) -> Self {
         Self::new(0.0, 0.0, width, height)
     }
+}
+
+impl Component for UvRectangle {
+    const TARGET_GPU: bool = true;
 }

@@ -16,6 +16,7 @@ use zoea_core::ecs::component::Component;
 pub struct ComponentLayout {
     pub id: ComponentId,
     pub layout: Layout,
+    pub align: usize,
     pub drop_fn: unsafe fn(NonNull<u8>),
 }
 
@@ -34,6 +35,7 @@ impl From<&PendingComponent> for ComponentLayout {
             id: pending.id,
             layout: pending.layout,
             drop_fn: pending.drop_fn,
+            align: pending.align,
         }
     }
 }
@@ -45,6 +47,7 @@ impl ComponentLayout {
             id,
             layout: Layout::new::<T>(),
             drop_fn: drop_component_helper::<T>,
+            align: T::ALIGNMENT,
         }
     }
 
@@ -54,17 +57,6 @@ impl ComponentLayout {
     #[inline]
     pub const fn size(&self) -> usize {
         self.layout.size()
-    }
-
-    /// Returns the required alignment in bytes for this component type.
-    ///
-    /// Crucial for custom raw buffers to ensure elements are written
-    /// to addresses that are multiples of this alignment value.
-    ///
-    /// *Performance: O(1) — Inline compile-time constant lookup.*
-    #[inline]
-    pub const fn align(&self) -> usize {
-        self.layout.align()
     }
 }
 
@@ -117,8 +109,7 @@ mod tests {
             "Extracted size metadata drifted from type configuration"
         );
         assert_eq!(
-            component_layout.align(),
-            16,
+            component_layout.align, 16,
             "Hardware alignment requirement was lost during conversion"
         );
     }
