@@ -30,10 +30,10 @@ pub struct Archetype {
     layouts: Vec<ComponentLayout>,
     available_chunk_hint: usize,
 
-    /// Cached edges for O(1) Archetype graph routing when adding components.
-    pub add_edges: HashMap<ComponentId, ArchetypeId>,
-    /// Cached edges for O(1) Archetype graph routing when removing components.
-    pub remove_edges: HashMap<ComponentId, ArchetypeId>,
+    /// Lazy Cached edges for O(1) Archetype graph routing when adding components.
+    add_edges: HashMap<ComponentId, (ArchetypeId, usize)>,
+    /// Lazy Cached edges for O(1) Archetype graph routing when removing components.
+    remove_edges: HashMap<ComponentId, (ArchetypeId, usize)>,
 }
 
 impl Archetype {
@@ -238,6 +238,38 @@ impl Archetype {
     #[inline]
     pub fn layouts(&self) -> &Vec<ComponentLayout> {
         &self.layouts
+    }
+
+    #[inline]
+    pub fn get_adding_edges(&self, component_id: ComponentId) -> Option<(ArchetypeId, usize)> {
+        self.add_edges.get(&component_id).copied()
+    }
+
+    #[inline]
+    pub fn get_removing_edges(&self, component_id: ComponentId) -> Option<(ArchetypeId, usize)> {
+        self.remove_edges.get(&component_id).copied()
+    }
+
+    #[inline]
+    pub fn insert_adding_edges(
+        &mut self,
+        component_id: ComponentId,
+        edges: ArchetypeId,
+        dst_archetype_component_index: usize,
+    ) {
+        self.add_edges
+            .insert(component_id, (edges, dst_archetype_component_index));
+    }
+
+    #[inline]
+    pub fn insert_removing_edges(
+        &mut self,
+        component_id: ComponentId,
+        edges: ArchetypeId,
+        dst_archetype_component_index: usize,
+    ) {
+        self.remove_edges
+            .insert(component_id, (edges, dst_archetype_component_index));
     }
 }
 

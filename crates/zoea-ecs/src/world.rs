@@ -85,6 +85,10 @@ impl World {
     /// current `Archetype` and moved into a new `Archetype` that matches its new
     /// component signature.
     ///
+    /// This method utilizes a lazy graph edge cache. The first time a component type
+    /// is added, the path is calculated via binary search and cached. Subsequent additions
+    /// of the same component type hit the $O(1)$ cache fast-path.
+    ///
     /// # Errors
     /// * `EcsError::EntityAlreadyDead` if the entity doesn't exist.
     /// * `EcsError::DuplicateComponent` if the entity already possesses this component type.
@@ -97,21 +101,42 @@ impl World {
         let added_component_id = get_component_id::<T>()?;
 
         let old_archetype = self.get_archetype_mut(old_location.archetype_id)?;
-        let mut new_mask = *old_archetype.mask();
-        new_mask.insert(added_component_id);
+        let (new_archetype_id, new_layout_inserted_component_index) = match old_archetype
+            .get_adding_edges(added_component_id)
+        {
+            Some(found_archetype) => found_archetype,
+            None => {
+                let mut old_layouts = old_archetype.layouts().clone();
 
-        let mut old_layouts = old_archetype.layouts().clone();
+                let (new_layout, new_layout_inserted_component_index) =
+                    match old_layouts.binary_search_by_key(&added_component_id, |l| l.id) {
+                        Ok(_) => return Err(EcsError::DuplicateComponent),
+                        Err(not_found_index) => {
+                            let component_layout = ComponentLayout::new::<T>(added_component_id);
+                            old_layouts.insert(not_found_index, component_layout);
+                            (old_layouts, not_found_index)
+                        }
+                    };
 
-        let (new_layout, new_layout_inserted_component_index) =
-            match old_layouts.binary_search_by_key(&added_component_id, |l| l.id) {
-                Ok(_) => return Err(EcsError::DuplicateComponent),
-                Err(not_found_index) => {
-                    let component_layout = ComponentLayout::new::<T>(added_component_id);
-                    old_layouts.insert(not_found_index, component_layout);
-                    (old_layouts, not_found_index)
-                }
-            };
-        let new_archetype_id = self.inner_get_or_create_archetype(new_mask, new_layout.clone())?;
+                let old_archetype_id = old_location.archetype_id;
+
+                let mut new_mask = old_archetype.mask().clone();
+                new_mask.insert(added_component_id);
+
+                let new_archetype_id =
+                    self.inner_get_or_create_archetype(new_mask, new_layout.clone())?;
+
+                let old_archetype = self.get_archetype_mut(old_archetype_id)?;
+
+                old_archetype.insert_adding_edges(
+                    added_component_id,
+                    new_archetype_id,
+                    new_layout_inserted_component_index,
+                );
+
+                (new_archetype_id, new_layout_inserted_component_index)
+            }
+        };
 
         let component_ptr = NonNull::new(&component as *const T as *mut u8).unwrap();
 
@@ -134,26 +159,53 @@ impl World {
     /// This moves the entity to a narrower `Archetype`. It also ensures the memory
     /// of the removed component is properly read out of the old chunk and safely dropped.
     ///
+    /// Like addition, this utilizes a lazy graph edge cache to completely bypass layout
+    /// recalculation and binary searches after the first structural transition of this type.
+    ///
     /// # Errors
     /// * `EcsError::EntityAlreadyDead` if the entity doesn't exist.
     /// * `EcsError::ComponentNotFound` if the entity does not have the specified component.
     pub fn remove_component<T: Component>(&mut self, id: EntityId) -> Result<(), EcsError> {
         let old_location = self.get_entity_location(id)?;
         let old_archetype = self.get_archetype_mut(old_location.archetype_id)?;
-        let mut old_layouts = old_archetype.layouts().clone();
 
         let removed_component_id = get_component_id::<T>()?;
-        let mut new_mask = *old_archetype.mask();
-        new_mask.remove(removed_component_id);
+        let old_archetype_id = old_location.archetype_id;
 
-        let (new_layout, old_layout_removed_component_index) =
-            match old_layouts.binary_search_by_key(&removed_component_id, |l| l.id) {
-                Ok(found_index) => {
-                    old_layouts.remove(found_index);
-                    (old_layouts, found_index)
+        let (new_archetype_id, old_layout_removed_component_index) =
+            match old_archetype.get_removing_edges(removed_component_id) {
+                Some(found_archetype) => found_archetype,
+                None => {
+                    let mut old_layouts = old_archetype.layouts().clone();
+
+                    let (new_layout, old_layout_removed_component_index) =
+                        match old_layouts.binary_search_by_key(&removed_component_id, |l| l.id) {
+                            Ok(found_index) => {
+                                old_layouts.remove(found_index);
+                                (old_layouts, found_index)
+                            }
+                            Err(_) => return Err(EcsError::ComponentNotFound),
+                        };
+
+                    let mut new_mask = old_archetype.mask().clone();
+                    new_mask.remove(removed_component_id);
+
+                    let new_archetype_id =
+                        self.inner_get_or_create_archetype(new_mask, new_layout.clone())?;
+
+                    let old_archetype = self.get_archetype_mut(old_archetype_id)?;
+
+                    old_archetype.insert_removing_edges(
+                        removed_component_id,
+                        new_archetype_id,
+                        old_layout_removed_component_index,
+                    );
+
+                    (new_archetype_id, old_layout_removed_component_index)
                 }
-                Err(_) => return Err(EcsError::ComponentNotFound),
             };
+
+        let old_archetype = self.get_archetype_mut(old_archetype_id)?;
 
         // We read the removed component out of raw memory to take ownership of it.
         // Once this block ends, `_removed_component` drops, safely executing T's Drop implementation.
@@ -163,8 +215,6 @@ impl World {
                 .get_component_ptr(old_layout_removed_component_index, old_location.chunk_index)?;
             unsafe { read(ptr.as_ptr() as *const T) }
         };
-
-        let new_archetype_id = self.inner_get_or_create_archetype(new_mask, new_layout)?;
 
         self.move_entity(
             old_location,
@@ -438,5 +488,101 @@ mod tests {
             Err(EcsError::EntityAlreadyDead)
         ));
         assert!(matches!(world.kill(e1), Err(EcsError::EntityAlreadyDead)));
+    }
+
+    #[test]
+    fn test_world_add_component_caches_graph_edges() {
+        let mut world = World::new();
+        let e1 = spawn_empty_entity(&mut world, 50);
+        let loc_initial = world.get_entity_location(e1).unwrap();
+        let comp_id = get_component_id::<Position>().unwrap();
+
+        // 1. Assert the cache is completely empty initially
+        {
+            let arch = world.get_archetype(loc_initial.archetype_id).unwrap();
+            assert!(
+                arch.get_adding_edges(comp_id).is_none(),
+                "Graph edge should not exist before the first addition"
+            );
+        }
+
+        // 2. Trigger the first addition (Cache Miss -> Recalculate & Insert)
+        world.add_component(e1, Position { x: 10, y: 20 }).unwrap();
+        let loc_after = world.get_entity_location(e1).unwrap();
+
+        // 3. Assert the edge was written back into the old archetype's cache
+        {
+            let arch = world.get_archetype(loc_initial.archetype_id).unwrap();
+            let edge = arch.get_adding_edges(comp_id);
+
+            assert!(
+                edge.is_some(),
+                "Graph edge was not saved to cache on a miss!"
+            );
+            let (target_arch_id, calculated_index) = edge.unwrap();
+
+            assert_eq!(
+                target_arch_id, loc_after.archetype_id,
+                "Cached archetype mismatch"
+            );
+            assert_eq!(
+                calculated_index, 0,
+                "First component added should live at column layout index 0"
+            );
+        }
+
+        // 4. Verify a second entity uses the cache seamlessly
+        let e2 = spawn_empty_entity(&mut world, 51);
+        world.add_component(e2, Position { x: 30, y: 40 }).unwrap(); // Cache Hit path execution
+
+        let loc_e2_after = world.get_entity_location(e2).unwrap();
+        assert_eq!(
+            loc_e2_after.archetype_id, loc_after.archetype_id,
+            "Entity 2 failed to route to the correct cached archetype node"
+        );
+    }
+
+    #[test]
+    fn test_world_remove_component_caches_graph_edges() {
+        let mut world = World::new();
+        let e1 = spawn_empty_entity(&mut world, 60);
+        let comp_id = get_component_id::<Position>().unwrap();
+
+        // Set up the entity with a component first
+        world
+            .add_component(e1, Position { x: 100, y: 100 })
+            .unwrap();
+        let loc_with_comp = world.get_entity_location(e1).unwrap();
+
+        // 1. Assert the removal cache is empty
+        {
+            let arch = world.get_archetype(loc_with_comp.archetype_id).unwrap();
+            assert!(arch.get_removing_edges(comp_id).is_none());
+        }
+
+        // 2. Trigger removal (Cache Miss -> Recalculate & Insert)
+        world.remove_component::<Position>(e1).unwrap();
+        let loc_after_remove = world.get_entity_location(e1).unwrap();
+
+        // 3. Verify the shortcut edge was recorded correctly
+        {
+            let arch = world.get_archetype(loc_with_comp.archetype_id).unwrap();
+            let edge = arch.get_removing_edges(comp_id);
+
+            assert!(
+                edge.is_some(),
+                "Removal graph edge was not saved to cache on a miss!"
+            );
+            let (target_arch_id, removed_index) = edge.unwrap();
+
+            assert_eq!(
+                target_arch_id, loc_after_remove.archetype_id,
+                "Cached fallback archetype mismatch"
+            );
+            assert_eq!(
+                removed_index, 0,
+                "The removed column index should match the target deletion index"
+            );
+        }
     }
 }
