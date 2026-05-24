@@ -43,9 +43,6 @@ impl<'world> EntityBuilder<'world> {
     ///
     /// Returns an [`EcsError`] if the component type `T` has not been registered in the system
     /// registry or lacks a valid runtime component ID assignment.
-    ///
-    /// *Note: Currently, adding the same component type multiple times does not trigger an error,
-    /// which can cause layout issues downstream inside archetype generation.*
     pub fn try_add<T>(mut self, component: T) -> Result<Self, EcsError>
     where
         T: Component,
@@ -66,25 +63,30 @@ impl<'world> EntityBuilder<'world> {
     /// * An archetype layout cannot be allocated or matched for this component grouping.
     /// * The system fails to acquire mutable access to the target archetype.
     /// * Target chunk allocations fail to accept the entity layout.
+    /// * `EcsError::DuplicateComponent` if the same component type is added multiple times.
     ///
     /// # Safety
     ///
     /// This method performs bitwise layout copies from raw pointers into component arrays.
-    /// To ensure memory safety, the builder immediately releases drop ownership over its internal
-    /// staging structures via `release_allocation_shell()` as soon as allocation succeeds.
+    /// To ensure memory safety, the builder hands over ownership of the staging vector to
+    /// the archetype, which releases allocation shells as soon as injection succeeds.
     pub fn build(mut self) -> Result<EntityId, EcsError> {
         self.components.sort_by_key(|c| c.id);
+
+        for windows in self.components.windows(2) {
+            if windows[0].id == windows[1].id {
+                return Err(EcsError::DuplicateComponent);
+            }
+        }
 
         let archetype_id = self.world.get_or_create_archetype(&self.components)?;
         let entity_id = self.world.generate_entity_id();
         let archetype = self.world.get_archetype_mut(archetype_id)?;
 
-        let entity_location = archetype.spawn(entity_id, &self.components)?;
-        self.world.set_entity_location(entity_id, entity_location);
+        let entity_location = archetype.spawn(entity_id, self.components)?;
 
-        for comp in self.components.drain(..) {
-            unsafe { comp.release_allocation_shell() };
-        }
+        self.world
+            .insert_entity_location(entity_id, entity_location);
 
         Ok(entity_id)
     }
@@ -158,5 +160,32 @@ mod tests {
             1,
             "PendingComponent failed to drop heap resources when the builder was abandoned!"
         );
+    }
+
+    #[test]
+    fn test_builder_prevents_duplicate_components() {
+        let drop_counter = Arc::new(AtomicUsize::new(0));
+        let mut world = World::new();
+
+        let c1 = TrackedComponent {
+            drop_counter: drop_counter.clone(),
+            _payload: "First instance".to_string(),
+        };
+        let c2 = TrackedComponent {
+            drop_counter: drop_counter.clone(),
+            _payload: "Second duplicate instance".to_string(),
+        };
+
+        let result = EntityBuilder::new(&mut world)
+            .try_add(c1)
+            .unwrap()
+            .try_add(c2)
+            .unwrap()
+            .build();
+
+        assert!(matches!(result, Err(EcsError::DuplicateComponent)));
+
+        // Transactional integrity check: Both components should be safely dropped on failure
+        assert_eq!(drop_counter.load(Ordering::SeqCst), 2);
     }
 }

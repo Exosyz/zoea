@@ -1,20 +1,31 @@
-use crate::storage::pending_component::PendingComponent;
+//! Lightweight layout metadata descriptors tracking structural footprints and destructors.
+//!
+//! A `ComponentLayout` stores size, hardware alignment, and type-erased destructor function
+//! pointers for a specific component type. It is stripped of raw pointers, making it safe to copy,
+//! share, and retain inside dense storage layouts like Archetypes or Tables.
+
+use crate::storage::pending_component::{drop_component_helper, PendingComponent};
 use crate::topology::component_registry::ComponentId;
 use std::alloc::Layout;
 use std::ptr::NonNull;
+use zoea_core::ecs::component::Component;
 
 /// A lightweight, copyable metadata descriptor defining the structural
 /// footprint and destructor behavior of a specific component type.
-///
-/// Stripped of raw pointers, this structure is safe to share, duplicate,
-/// and store alongside dense storage backends (e.g., Archetypes or Table views)
-/// to dynamically handle raw memory allocations and dynamic drops.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug)]
 pub struct ComponentLayout {
     pub id: ComponentId,
     pub layout: Layout,
     pub drop_fn: unsafe fn(NonNull<u8>),
 }
+
+impl PartialEq for ComponentLayout {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl Eq for ComponentLayout {}
 
 impl From<&PendingComponent> for ComponentLayout {
     #[inline]
@@ -28,9 +39,18 @@ impl From<&PendingComponent> for ComponentLayout {
 }
 
 impl ComponentLayout {
+    /// Instantiates a new component structural layout metadata block for type `T`.
+    pub fn new<T: Component>(id: ComponentId) -> Self {
+        Self {
+            id,
+            layout: Layout::new::<T>(),
+            drop_fn: drop_component_helper::<T>,
+        }
+    }
+
     /// Returns the exact size in bytes required by this component type.
     ///
-    /// *Performance: $O(1)$ — Inline compile-time constant lookup.*
+    /// *Performance: O(1) — Inline compile-time constant lookup.*
     #[inline]
     pub const fn size(&self) -> usize {
         self.layout.size()
@@ -41,25 +61,26 @@ impl ComponentLayout {
     /// Crucial for custom raw buffers to ensure elements are written
     /// to addresses that are multiples of this alignment value.
     ///
-    /// *Performance: $O(1)$ — Inline compile-time constant lookup.*
+    /// *Performance: O(1) — Inline compile-time constant lookup.*
     #[inline]
     pub const fn align(&self) -> usize {
         self.layout.align()
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::alloc::dealloc;
     use std::mem::forget;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use zoea_core::ecs::component::Component;
 
     // Global atomic counter tracking component destructor calls
     static COMPONENT_DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
 
     // A heavy test component type with a strict explicit alignment requirement
     #[repr(align(16))]
+    #[derive(Clone)]
     struct ManagedVector {
         _x: f32,
         _y: f32,

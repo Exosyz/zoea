@@ -1,153 +1,144 @@
+//! Temporary type-erased component containers for staging and transactional ingestion.
+//!
+//! Provides `PendingComponent`, a structure that wraps dynamically added components
+//! on the heap with type-erased pointers and custom destructors, ensuring safe lifecycle
+//! tracking prior to array consolidation.
+
 use crate::topology::component_registry::ComponentId;
-use std::alloc::{alloc, dealloc, Layout};
+use std::alloc::{alloc, dealloc, handle_alloc_error, Layout};
 use std::mem::forget;
 use std::ptr::{drop_in_place, write, NonNull};
 use zoea_core::ecs::component::Component;
 
-/// A type-erased container holding a dynamically allocated component prior to
-/// insertion into the ECS dense arrays (typically used in Command Buffers).
+/// A type-erased heap staging container holding an initialized component instance
+/// along with its layout characteristics and dynamic destructor.
 pub struct PendingComponent {
     pub id: ComponentId,
-    pub layout: Layout,
     pub ptr: NonNull<u8>,
-    /// Type-erased function pointer that handles both payload dropping
-    /// and heap deallocation if the component container is abandoned.
+    pub layout: Layout,
     pub drop_fn: unsafe fn(NonNull<u8>),
 }
 
-/// Generic named drop helper. Reconstructs the original Box context to drop
-/// inner data structures and return the raw allocation block back to the system allocator.
-unsafe fn drop_component_helper<T: Component>(ptr: NonNull<u8>) {
-    unsafe {
-        drop_in_place(ptr.as_ptr() as *mut T);
-    }
-}
-
 impl PendingComponent {
-    /// Creates a new type-erased `PendingComponent`.
-    ///
-    /// # Safety
-    /// The provided `ptr` must be a valid, heap-allocated pointer created using
-    /// an active `Box::into_raw` context matching type `T`.
-    pub fn new<T: Component>(id: ComponentId, instance: T) -> Self {
+    /// Boxes a component instance onto the heap, returning a type-erased tracking descriptor.
+    pub fn new<T: Component>(id: ComponentId, value: T) -> Self {
         let layout = Layout::new::<T>();
 
-        let ptr = if layout.size() == 0 {
-            // For ZST (Zero size tag), we use dangling ptr (safe and align)
-            NonNull::dangling()
-        } else {
-            let raw = unsafe { alloc(layout) };
-            let non_null = NonNull::new(raw).expect("Allocation failed");
-            unsafe {
-                write(non_null.as_ptr() as *mut T, instance);
-            }
-            non_null
-        };
+        if layout.size() == 0 {
+            return Self {
+                id,
+                ptr: NonNull::dangling(),
+                layout,
+                drop_fn: drop_component_helper::<T>,
+            };
+        }
+
+        let raw = unsafe { alloc(layout) };
+        if raw.is_null() {
+            handle_alloc_error(layout);
+        }
+
+        unsafe {
+            write(raw as *mut T, value);
+        }
 
         Self {
             id,
-            layout: Layout::new::<T>(),
-            ptr,
+            ptr: NonNull::new(raw).unwrap(),
+            layout,
             drop_fn: drop_component_helper::<T>,
         }
     }
 
-    /// Releases the heap-allocated staging memory without invoking the underlying
-    /// component's destructor, as the value has been moved into a Chunk.
+    /// Releases the temporary staging allocation box without invoking the component's destructor.
     ///
-    /// # Safety
-    /// This method must only be called if the contents of the pointer have been copied
-    /// into another storage area that now assumes dropping responsibility.
+    /// Crucial when handing off component data payloads to dense contiguous storage arrays,
+    /// preventing staging memory leaks while leaving the copied data intact.
     pub unsafe fn release_allocation_shell(self) {
         if self.layout.size() > 0 {
             unsafe { dealloc(self.ptr.as_ptr(), self.layout) };
         }
-
         forget(self);
+    }
+
+    /// Custom deep-cloning routine for testing scenarios to safely replicate staging data
+    /// without inducing raw pointer double-frees or aliasing conflicts.
+    #[cfg(test)]
+    pub fn test_clone<T: Component + Clone>(&self) -> Self {
+        unsafe {
+            let source_val = &*(self.ptr.as_ptr() as *const T);
+            Self::new::<T>(self.id, source_val.clone())
+        }
     }
 }
 
 impl Drop for PendingComponent {
-    #[inline]
     fn drop(&mut self) {
-        unsafe {
-            (self.drop_fn)(self.ptr);
-
-            if self.layout.size() > 0 {
+        if self.layout.size() > 0 {
+            unsafe {
+                // Call the type-erased destructor function pointer first
+                (self.drop_fn)(self.ptr);
+                // Free the backing layout box memory
                 dealloc(self.ptr.as_ptr(), self.layout);
             }
         }
     }
 }
 
+/// Type-erased helper hook used to cleanly invoke standard `Drop::drop` implementations.
+pub unsafe fn drop_component_helper<T: Component>(ptr: NonNull<u8>) {
+    unsafe { drop_in_place(ptr.as_ptr() as *mut T) };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    static DROP_COUNTER: AtomicUsize = AtomicUsize::new(0);
-
-    struct DroppableComponent {
-        _data: String,
-    }
-    impl Component for DroppableComponent {}
-    impl Drop for DroppableComponent {
-        fn drop(&mut self) {
-            DROP_COUNTER.fetch_add(1, Ordering::SeqCst);
-        }
-    }
-
-    struct TrivialComponent {
-        _id: u32,
-    }
-    impl Component for TrivialComponent {}
+    // Integrated directly with your shared test utility file
+    use crate::test_utils::{DroppableComponent, Position};
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn test_pending_component_triggers_drop_on_raii() {
-        DROP_COUNTER.store(0, Ordering::SeqCst);
-        let component_id = ComponentId(1);
-
+        let counter = Arc::new(Mutex::new(0));
         {
-            let _pending = PendingComponent::new(
-                component_id,
-                DroppableComponent {
-                    _data: String::from("Zoea Safe Optimization"),
-                },
-            );
+            let comp = DroppableComponent {
+                counter: counter.clone(),
+            };
+            let _pending = PendingComponent::new(ComponentId(1), comp);
         }
-
-        assert_eq!(DROP_COUNTER.load(Ordering::SeqCst), 1);
+        assert_eq!(*counter.lock().unwrap(), 1);
     }
 
     #[test]
     fn test_pending_component_with_trivial_type_frees_memory_without_leak() {
-        let component_id = ComponentId(2);
         {
-            let _pending = PendingComponent::new(component_id, TrivialComponent { _id: 42 });
-        } // Safely reclaims memory here via Box::from_raw handling inside drop_component_helper
+            let _pending = PendingComponent::new(ComponentId(2), Position::from(10));
+        }
+        // Miri confirms that memory allocations for primitive/copy types are successfully reclaimed
     }
 
     #[test]
     fn test_extracted_drop_fn_executes_correctly_without_aliasing_violation() {
-        DROP_COUNTER.store(0, Ordering::SeqCst);
-        let component_id = ComponentId(3);
-
-        let pending = PendingComponent::new(
-            component_id,
-            DroppableComponent {
-                _data: String::from("Pure Raw Pointer Test"),
-            },
-        );
+        let counter = Arc::new(Mutex::new(0));
+        let comp = DroppableComponent {
+            counter: counter.clone(),
+        };
+        let pending = PendingComponent::new(ComponentId(3), comp);
 
         unsafe {
-            // Trigger drop directly using the function pointer.
-            // This increments the counter AND frees the underlying heap allocation.
+            // Execute the dynamic type-erased destructor function pointer directly
             (pending.drop_fn)(pending.ptr);
-
-            // Disarm the container's standard RAII drop so it doesn't trigger a double-free.
-            forget(pending);
         }
 
-        assert_eq!(DROP_COUNTER.load(Ordering::SeqCst), 1);
+        assert_eq!(*counter.lock().unwrap(), 1);
+
+        // Explicitly clear the underlying raw container allocation shell
+        // to prevent staging memory leaks during manually unrolled tests
+        unsafe {
+            if pending.layout.size() > 0 {
+                dealloc(pending.ptr.as_ptr(), pending.layout);
+            }
+        }
+        forget(pending);
     }
 }

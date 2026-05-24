@@ -21,6 +21,8 @@ cargo test -p zoea-ecs -- storage::chunk
 
 Pour supprimer les warnings lors des tests ajouter devant la commande `RUSTFLAGS="-Awarnings" `
 
+Pour utiliser miri : `cargo +nightly miri test`
+
 ### Tree View
 
 ```shell

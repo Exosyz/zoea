@@ -1,6 +1,6 @@
 use crate::game_logic::GameLogic;
 use std::collections::HashMap;
-use zoea_ecs::world::{TempEntity, World};
+use zoea_ecs::world::World;
 use zoea_rendering::renderer::GameRenderer;
 
 #[derive(Default)]
@@ -10,10 +10,10 @@ pub struct Scene {
 }
 
 impl Scene {
-    pub fn add_entities(&mut self, entities: Vec<TempEntity>) {
-        entities.into_iter().for_each(|entity| {
-            //self.world.spawn(entity);
-        })
+    pub fn add_entities(&mut self) {
+        //entities.into_iter().for_each(|entity| {
+        //self.world.spawn(entity);
+        //})
     }
     pub fn load(&mut self) {}
 
