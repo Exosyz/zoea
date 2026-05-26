@@ -138,6 +138,10 @@ impl World {
             }
         };
 
+        // SAFETY:
+        // We create a raw pointer to an object currently on the stack.
+        // This pointer is passed to the archetype's storage which will copy the bits
+        // into the managed SoA memory, effectively "moving" the data out of the stack's control.
         let component_ptr = NonNull::new(&component as *const T as *mut u8).unwrap();
 
         self.move_entity(
@@ -147,8 +151,10 @@ impl World {
             new_layout_inserted_component_index,
         )?;
 
-        // CRITICAL SAFETY: Tell Rust NOT to drop the local 'component' variable.
-        // Its data was just copied directly into the Chunk memory!
+        // SAFETY:
+        // Crucial step: The component's memory has been bitwise-copied into the archetype's chunk.
+        // We must prevent Rust from running the destructor on the original stack variable,
+        // otherwise, it would result in a double-free or invalid memory access.
         forget(component);
 
         Ok(())
@@ -207,8 +213,11 @@ impl World {
 
         let old_archetype = self.get_archetype_mut(old_archetype_id)?;
 
-        // We read the removed component out of raw memory to take ownership of it.
-        // Once this block ends, `_removed_component` drops, safely executing T's Drop implementation.
+        // SAFETY:
+        // We extract the component from the chunk by reading the raw bytes.
+        // This effectively transfers ownership from the ECS memory back to the Rust stack.
+        // Once `_removed_component` goes out of scope, its Drop implementation will be called,
+        // cleaning up the component properly.
         let _removed_component = {
             let chunk = old_archetype.get_chunk(old_location.chunk_id)?;
             let ptr = chunk
@@ -368,9 +377,11 @@ impl World {
         let chunk = archetype.get_chunk(location.chunk_id)?;
         let ptr = chunk.get_component_ptr(column_index, location.chunk_index)?;
 
-        // SAFETY: The ECS guarantees the pointer is valid, properly aligned,
-        // points to an initialized instance of T, and obeys Rust's aliasing rules
-        // since we only yield an immutable reference based on an immutable `&self` borrow.
+        // SAFETY:
+        // The ECS invariant ensures that the retrieved pointer is valid and correctly
+        // points to an initialized instance of type T. Since we only return an immutable
+        // reference (&T) and we are borrowing 'self' immutably, we strictly obey
+        // Rust's borrowing rules (aliasing/mutability).
         Ok(unsafe { &*(ptr.as_ptr() as *const T) })
     }
 }
@@ -438,8 +449,6 @@ mod tests {
 
         world.add_component(e1, droppable).unwrap();
 
-        // Removal MUST trigger the `Drop` trait implementation
-        // via the unsafe read in `remove_component`
         world.remove_component::<DroppableComponent>(e1).unwrap();
 
         assert_eq!(

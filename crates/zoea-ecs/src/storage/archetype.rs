@@ -84,6 +84,11 @@ impl Archetype {
         let raw_ptrs: Vec<NonNull<u8>> = components.iter().map(|c| c.ptr).collect();
 
         let chunk = self.get_chunk_mut(chunk_id);
+
+        // SAFETY:
+        // 1. `components` length matches `self.layouts.len()` precisely.
+        // 2. `raw_ptrs` mappings accurately reflect the ordered column layout expected by the chunk.
+        // 3. We transfer logical ownership of the pending components' data to the chunk.
         let chunk_index = unsafe { chunk.push(entity_id, &raw_ptrs) }?;
 
         // If the chunk we just wrote to is now completely full, advance the free-space hint.
@@ -92,9 +97,10 @@ impl Archetype {
         }
 
         for comp in components {
-            unsafe {
-                comp.release_allocation_shell();
-            }
+            // SAFETY:
+            // Ownership of the underlying component data was fully transferred to the chunk via `push`.
+            // We release the staging heap shell without triggering the component's internal drop implementation.
+            unsafe { comp.release_allocation_shell() };
         }
 
         let location = EntityLocation::new(entity_id, self.id, chunk_id, chunk_index);
@@ -109,6 +115,10 @@ impl Archetype {
         chunk_index: usize,
     ) -> Result<Option<EntityId>, EcsError> {
         let chunk = self.get_chunk_mut(chunk_id);
+
+        // SAFETY:
+        // The `chunk_index` is strictly provided by internal ECS location routing, ensuring
+        // it targets a valid, initialized slot within this specific chunk.
         let swapped_entity = unsafe { chunk.swap_remove_and_forget(chunk_index) }?;
 
         // We just freed a slot via swap_remove.
@@ -162,6 +172,10 @@ impl Archetype {
         chunk_index: usize,
     ) -> Result<Vec<NonNull<u8>>, EcsError> {
         let chunk = self.get_chunk_mut(chunk_id);
+
+        // SAFETY:
+        // `chunk_index` is validated via standard ECS location tracking maps, ensuring
+        // it strictly bounds to an initialized element sequence.
         unsafe { chunk.extract_entity(chunk_index) }
     }
 
@@ -174,7 +188,11 @@ impl Archetype {
         let chunk_id = self.get_available_chunk_id()?;
         let chunk = self.get_chunk_mut(chunk_id);
 
+        // SAFETY:
+        // The injected `ptrs` vector was extracted from an identical or compatible archetype layout.
+        // The caller guarantees they structurally mimic the component size and column order expected.
         let chunk_index = unsafe { chunk.inject_entity(ptrs)? };
+
         Ok(EntityLocation::new(
             entity_id,
             self.id,
@@ -197,8 +215,9 @@ impl Archetype {
 
         for (col_idx, layout) in layouts.iter().enumerate() {
             if let Ok(ptr) = chunk.get_component_ptr(col_idx, chunk_index) {
-                // SAFETY: The component layout is guaranteed to provide the correct
-                // drop function pointer for the type stored in this column.
+                // SAFETY:
+                // The component layout provides the exact type-erased drop function pointer
+                // for the underlying type currently mapped to this raw column.
                 unsafe { (layout.drop_fn)(ptr) };
             }
         }

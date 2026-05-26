@@ -35,14 +35,18 @@ impl PendingComponent {
             };
         }
 
+        // SAFETY:
+        // `layout.size()` > 0 is verified. Standard `alloc` serves compliant layout bounds
+        // securely supporting correctly aligned tracking domains internally.
         let raw = unsafe { alloc(layout) };
         if raw.is_null() {
             handle_alloc_error(layout);
         }
 
-        unsafe {
-            write(raw as *mut T, value);
-        }
+        // SAFETY:
+        // `raw` serves perfectly aligned mapping footprints for specific layout blocks dynamically
+        // tracking structural fields natively without generating arbitrary alias bugs.
+        unsafe { write(raw as *mut T, value) };
 
         Self {
             id,
@@ -59,6 +63,9 @@ impl PendingComponent {
     /// preventing staging memory leaks while leaving the copied data intact.
     pub unsafe fn release_allocation_shell(self) {
         if self.layout.size() > 0 {
+            // SAFETY:
+            // `self.ptr` successfully generated using internal native `alloc` maps directly.
+            // By filtering 0-size layouts, we drop specifically compliant heap domains directly.
             unsafe { dealloc(self.ptr.as_ptr(), self.layout) };
         }
         forget(self);
@@ -68,6 +75,9 @@ impl PendingComponent {
     /// without inducing raw pointer double-frees or aliasing conflicts.
     #[cfg(test)]
     pub fn test_clone<T: Component + Clone>(&self) -> Self {
+        // SAFETY:
+        // `self.ptr` consistently links to valid `T` constructed securely via native `new` operations.
+        // Cloning bridges typed layouts actively back onto fresh standard allocators manually.
         unsafe {
             let source_val = &*(self.ptr.as_ptr() as *const T);
             Self::new::<T>(self.id, source_val.clone())
@@ -78,6 +88,9 @@ impl PendingComponent {
 impl Drop for PendingComponent {
     fn drop(&mut self) {
         if self.layout.size() > 0 {
+            // SAFETY:
+            // Validating positive layouts restricts tracking boundaries gracefully, verifying explicitly
+            // configured drop hook behavior processes securely before dropping allocation constraints entirely.
             unsafe {
                 // Call the type-erased destructor function pointer first
                 (self.drop_fn)(self.ptr);
@@ -90,6 +103,9 @@ impl Drop for PendingComponent {
 
 /// Type-erased helper hook used to cleanly invoke standard `Drop::drop` implementations.
 pub unsafe fn drop_component_helper<T: Component>(ptr: NonNull<u8>) {
+    // SAFETY:
+    // Secure up-chain contracts explicitly guarantee `ptr` controls initialized active `T` structures.
+    // `drop_in_place` smoothly handles inline destruction routines without illegally freeing outer structures.
     unsafe { drop_in_place(ptr.as_ptr() as *mut T) };
 }
 

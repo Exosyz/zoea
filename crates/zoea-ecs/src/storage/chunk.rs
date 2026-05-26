@@ -104,6 +104,9 @@ impl Chunk {
         columns: Vec<Column>,
         #[cfg(test)] was_cloned_via_new_from: bool,
     ) -> Result<Self, EcsError> {
+        // SAFETY:
+        // The `layout` explicitly originates from `compute_chunk_layout`, meaning it guarantees
+        // a non-zero size mapping safely conforming to rigorous Rust memory alignment prerequisites.
         let ptr = unsafe { alloc(layout) };
         let storage = NonNull::new(ptr).ok_or(EcsError::LayoutCalculationFailed)?;
 
@@ -173,6 +176,9 @@ impl Chunk {
         if col.size() == 0 {
             Ok(NonNull::dangling())
         } else {
+            // SAFETY:
+            // The bounds checks immediately above (`component_index < len` and `index < self.len`)
+            // ensure offset calculations land strictly inside initialized data boundaries within the chunk.
             unsafe { Ok(col.get_component_ptr(self.storage, index)) }
         }
     }
@@ -184,10 +190,19 @@ impl Chunk {
             return Err(EcsError::EntityIndexOutOfBounds);
         }
         let entity_base_ptr = self.storage.as_ptr() as *const EntityId;
+        // SAFETY:
+        // `index < self.len` verifies the requested slot falls perfectly within the active
+        // `EntityId` array positioned directly at the front of the chunk's base storage block.
         unsafe { Ok(*entity_base_ptr.add(index)) }
     }
 
-    pub unsafe fn get_column_slice_info(&self, component_index: usize) -> (NonNull<u8>, usize) {
+    /// Exposes read-only slice references bounding raw array pointer data formats safely.
+    #[inline]
+
+    pub fn get_column_slice_info(&self, component_index: usize) -> (NonNull<u8>, usize) {
+        // SAFETY:
+        // The column offset is mathematically bound to the layout constructed for `self.storage`.
+        // Fetching the base pointer is safe; dereferencing it out of bounds remains the caller's burden.
         let ptr = unsafe { self.columns[component_index].get_ptr(self.storage) };
 
         (ptr, self.len)
@@ -213,11 +228,19 @@ impl Chunk {
         let index = self.len;
 
         let entity_base_ptr = self.storage.as_ptr() as *mut EntityId;
+
+        // SAFETY:
+        // `index == self.len`, which is strictly `< self.capacity`. The underlying array
+        // pointer arithmetic safely maps to uninitialized space exclusively managed by us.
         unsafe { entity_base_ptr.add(index).write(entity_id) };
 
         for (idx, column) in self.columns.iter().enumerate() {
             if column.size() > 0 {
                 let data_ptr = components[idx];
+
+                // SAFETY:
+                // We verified `!self.is_full()`, mapping `index` safely into the allocated column span.
+                // The caller guarantees `data_ptr` points to contiguous initialized bytes mirroring `column.size()`.
                 unsafe {
                     let column_ptr = column.get_component_ptr(self.storage, index);
                     copy_nonoverlapping(data_ptr.as_ptr(), column_ptr.as_ptr(), column.size());
@@ -251,12 +274,22 @@ impl Chunk {
         }
 
         let entity_base_ptr = self.storage.as_ptr() as *mut EntityId;
-        let moved_entity = *entity_base_ptr.add(last_index);
 
+        // SAFETY:
+        // `last_index` correspond à `self.len - 1`, ce qui garantit que nous lisons un `EntityId`
+        // valide et initialisé tout à la fin du tableau dense.
+        let moved_entity = unsafe { *entity_base_ptr.add(last_index) };
+
+        // SAFETY:
+        // We verified `index < self.len`. `entity_base_ptr` represents a contiguous dense block.
+        // We legally overwrite the discarded index spot using the final active `EntityId` slot.
         unsafe { *entity_base_ptr.add(index) = moved_entity };
 
         for column in self.columns.iter() {
             if column.size() > 0 {
+                // SAFETY:
+                // `last_index` and `index` are checked within bounds. They are distinct indices
+                // (prevented by `index == last_index` early return), allowing non-overlapping data block shifts.
                 unsafe {
                     let src = column.get_component_ptr(self.storage, last_index);
                     let dst = column.get_component_ptr(self.storage, index);
@@ -283,12 +316,18 @@ impl Chunk {
 
         self.drop_at(index);
 
+        // SAFETY:
+        // The element data residing at `index` was gracefully destructed via `drop_at`.
+        // The newly produced uninitialized gap is securely backfilled through `swap_remove_and_forget`.
         unsafe { self.swap_remove_and_forget(index) }
     }
 
     fn drop_at(&mut self, index: usize) {
         for col in self.columns.iter() {
             if col.size() > 0 {
+                // SAFETY:
+                // The localized `index` bounds are checked and maintained upchain by callers.
+                // The `drop_fn` targets the specific erased memory footprint tracked by the column config.
                 unsafe {
                     let ptr = col.get_component_ptr(self.storage, index);
                     (col.drop_fn)(ptr);
@@ -317,6 +356,9 @@ impl Chunk {
         }
 
         let mut ptrs = Vec::with_capacity(self.columns.len() + 1);
+        // SAFETY:
+        // `index < self.len` verifies index validity. The chunk base storage address always begins
+        // strictly packed with the underlying structural `EntityId` arrays.
         let id_ptr_raw = unsafe { (self.storage.as_ptr() as *mut EntityId).add(index) };
         let id_ptr = NonNull::new(id_ptr_raw as *mut u8).ok_or(EcsError::InternalError)?;
         ptrs.push(id_ptr);
@@ -325,6 +367,9 @@ impl Chunk {
             let ptr = if column.size() == 0 {
                 NonNull::dangling()
             } else {
+                // SAFETY:
+                // `index < self.len` restricts mapping ranges perfectly inside the layout boundary limits.
+                // Pointers reflect active memory allocations explicitly controlled by chunk lifetimes.
                 unsafe { column.get_component_ptr(self.storage, index) }
             };
             ptrs.push(ptr);
@@ -350,9 +395,21 @@ impl Chunk {
         let index = self.len;
 
         let entity_base_ptr = self.storage.as_ptr() as *mut EntityId;
+        // SAFETY:
+        // `index < self.capacity` validates memory bounds limits. Arithmetic seamlessly targets
+        // uninitialized tail blocks, safely ingesting the layout component bits through unaligned writes.
         let entity_ptr = unsafe { entity_base_ptr.add(index) };
         let data_ptr = ptrs[0];
 
+        // SAFETY:
+        // 1. Destination validity: `entity_base_ptr.add(index)` points to an uninitialized
+        //    but valid memory slot within the pre-allocated chunk storage, calculated to
+        //    ensure we stay within the `capacity` limit.
+        // 2. No overlapping: By design, `entity_base_ptr` resides at the head of the chunk,
+        //    and columns are strictly separated. The source memory (`data_ptr`) is guaranteed
+        //    to be disjoint from the chunk's memory range.
+        // 3. Alignment and size: `EntityId` size matches the fixed-size layout of the
+        //    entity ID column. This copy is a trivial bitwise operation on a POD (Plain Old Data) type.
         unsafe {
             copy_nonoverlapping(
                 data_ptr.as_ptr(),
@@ -364,6 +421,9 @@ impl Chunk {
         for (idx, column) in self.columns.iter().enumerate() {
             if column.size() > 0 {
                 let data_ptr = ptrs[idx + 1];
+                // SAFETY:
+                // Safe up-chain guarantees enforce `data_ptr` to mimic `column.size()`.
+                // `copy_nonoverlapping` perfectly writes type-erased value forms deep into storage slices.
                 unsafe {
                     let column_ptr = column.get_component_ptr(self.storage, index);
                     copy_nonoverlapping(data_ptr.as_ptr(), column_ptr.as_ptr(), column.size());
@@ -397,6 +457,10 @@ impl Chunk {
 impl Drop for Chunk {
     fn drop(&mut self) {
         self.clear();
+
+        // SAFETY:
+        // `self.storage` exclusively spawned from `alloc` using `self.layout`. We trigger a mirrored
+        // structural wipe utilizing the exact same footprint rules established globally.
         unsafe {
             dealloc(self.storage.as_ptr(), self.layout);
         }

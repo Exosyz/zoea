@@ -39,7 +39,9 @@ impl Column {
     /// * The `chunk_ptr` must be properly aligned according to this column's internal requirements.
     #[inline]
     pub unsafe fn get_component_ptr(&self, chunk_ptr: NonNull<u8>, index: usize) -> NonNull<u8> {
-        // SAFETY: pointer addition remains completely in-bounds of the active allocation
+        // SAFETY:
+        // The calling domain rigidly guarantees `chunk_ptr` represents a memory block wide enough
+        // to manage nested bounds offset arithmetic cleanly without crossing segment faults.
         unsafe { chunk_ptr.add(self.offset + (index * self.element_size)) }
     }
 
@@ -52,7 +54,9 @@ impl Column {
     /// * The `chunk_ptr` must be properly aligned according to this column's internal requirements.
     #[inline]
     pub unsafe fn get_ptr(&self, chunk_ptr: NonNull<u8>) -> NonNull<u8> {
-        // SAFETY: pointer addition remains completely in-bounds of the active allocation
+        // SAFETY:
+        // Similar to element extraction, the caller bounds the raw tracking index explicitly targeting
+        // physical byte allocation headers safely bound securely into memory chunks.
         unsafe { chunk_ptr.add(self.offset) }
     }
 
