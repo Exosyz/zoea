@@ -13,7 +13,7 @@ Before you stream anything to the GPU, your raw CPU memory must be padded to mat
   boundary (typically 64-byte for CPU SIMD or 256-byte for GPU constants).
 
 
-* [ ] **Implement Continuous Column Exporters**
+* [x] **Implement Continuous Column Exporters**
 * Add safe methods to `Chunk` to extract a clean raw pointer and byte length for an entire column:
 
 ```rust

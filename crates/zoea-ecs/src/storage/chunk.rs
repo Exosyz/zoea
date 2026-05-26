@@ -173,7 +173,7 @@ impl Chunk {
         if col.size() == 0 {
             Ok(NonNull::dangling())
         } else {
-            unsafe { Ok(col.get_ptr(self.storage, index)) }
+            unsafe { Ok(col.get_component_ptr(self.storage, index)) }
         }
     }
 
@@ -185,6 +185,12 @@ impl Chunk {
         }
         let entity_base_ptr = self.storage.as_ptr() as *const EntityId;
         unsafe { Ok(*entity_base_ptr.add(index)) }
+    }
+
+    pub unsafe fn get_column_slice_info(&self, component_index: usize) -> (NonNull<u8>, usize) {
+        let ptr = unsafe { self.columns[component_index].get_ptr(self.storage) };
+
+        (ptr, self.len)
     }
 
     /// Appends an entity and its raw component pointer configurations to dense SoA layouts.
@@ -213,7 +219,7 @@ impl Chunk {
             if column.size() > 0 {
                 let data_ptr = components[idx];
                 unsafe {
-                    let column_ptr = column.get_ptr(self.storage, index);
+                    let column_ptr = column.get_component_ptr(self.storage, index);
                     copy_nonoverlapping(data_ptr.as_ptr(), column_ptr.as_ptr(), column.size());
                 }
             }
@@ -252,8 +258,8 @@ impl Chunk {
         for column in self.columns.iter() {
             if column.size() > 0 {
                 unsafe {
-                    let src = column.get_ptr(self.storage, last_index);
-                    let dst = column.get_ptr(self.storage, index);
+                    let src = column.get_component_ptr(self.storage, last_index);
+                    let dst = column.get_component_ptr(self.storage, index);
                     copy_nonoverlapping(src.as_ptr(), dst.as_ptr(), column.size());
                 }
             }
@@ -284,7 +290,7 @@ impl Chunk {
         for col in self.columns.iter() {
             if col.size() > 0 {
                 unsafe {
-                    let ptr = col.get_ptr(self.storage, index);
+                    let ptr = col.get_component_ptr(self.storage, index);
                     (col.drop_fn)(ptr);
                 }
             }
@@ -319,7 +325,7 @@ impl Chunk {
             let ptr = if column.size() == 0 {
                 NonNull::dangling()
             } else {
-                unsafe { column.get_ptr(self.storage, index) }
+                unsafe { column.get_component_ptr(self.storage, index) }
             };
             ptrs.push(ptr);
         }
@@ -359,7 +365,7 @@ impl Chunk {
             if column.size() > 0 {
                 let data_ptr = ptrs[idx + 1];
                 unsafe {
-                    let column_ptr = column.get_ptr(self.storage, index);
+                    let column_ptr = column.get_component_ptr(self.storage, index);
                     copy_nonoverlapping(data_ptr.as_ptr(), column_ptr.as_ptr(), column.size());
                 }
             }
@@ -419,7 +425,7 @@ mod tests {
         );
 
         for (idx, col) in chunk.columns.iter().enumerate() {
-            let column_ptr = unsafe { col.get_ptr(chunk.storage, 0) };
+            let column_ptr = unsafe { col.get_component_ptr(chunk.storage, 0) };
             let column_address = column_ptr.as_ptr() as usize;
 
             assert_eq!(

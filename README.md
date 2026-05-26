@@ -23,6 +23,12 @@ Pour supprimer les warnings lors des tests ajouter devant la commande `RUSTFLAGS
 
 Pour utiliser miri : `cargo +nightly miri test`
 
+Full version
+
+```shell
+RUSTFLAGS="-Awarnings" cargo +nightly miri test -p zoea-ecs
+```
+
 ### Tree View
 
 ```shell

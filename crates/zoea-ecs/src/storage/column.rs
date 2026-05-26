@@ -38,9 +38,22 @@ impl Column {
     ///   of the allocated memory block.
     /// * The `chunk_ptr` must be properly aligned according to this column's internal requirements.
     #[inline]
-    pub unsafe fn get_ptr(&self, chunk_ptr: NonNull<u8>, index: usize) -> NonNull<u8> {
-        // Safety check: pointer addition remains completely in-bounds of the active allocation
+    pub unsafe fn get_component_ptr(&self, chunk_ptr: NonNull<u8>, index: usize) -> NonNull<u8> {
+        // SAFETY: pointer addition remains completely in-bounds of the active allocation
         unsafe { chunk_ptr.add(self.offset + (index * self.element_size)) }
+    }
+
+    /// Computes the read-only raw pointer to the element within a structural data chunk.
+    ///
+    /// # Safety
+    /// * `chunk_ptr` must point to a valid allocation containing this column's data.
+    /// * The calculated address (`offset`) must fall within the bounds
+    ///   of the allocated memory block.
+    /// * The `chunk_ptr` must be properly aligned according to this column's internal requirements.
+    #[inline]
+    pub unsafe fn get_ptr(&self, chunk_ptr: NonNull<u8>) -> NonNull<u8> {
+        // SAFETY: pointer addition remains completely in-bounds of the active allocation
+        unsafe { chunk_ptr.add(self.offset) }
     }
 
     /// Returns the uniform size in bytes of an individual element in this column.
@@ -91,8 +104,8 @@ mod tests {
             std::ptr::write(ptr_idx_1, Velocity { dx: 0.0, dy: 10.0 });
 
             // Validate that get_ptr matches our manual layouts completely using NonNull
-            let resolved_0 = column.get_ptr(chunk_ptr, 0);
-            let resolved_1 = column.get_ptr(chunk_ptr, 1);
+            let resolved_0 = column.get_component_ptr(chunk_ptr, 0);
+            let resolved_1 = column.get_component_ptr(chunk_ptr, 1);
 
             assert_eq!(
                 resolved_0.as_ptr() as *const Velocity,
